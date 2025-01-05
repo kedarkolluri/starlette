@@ -11,6 +11,7 @@ else:  # pragma: no cover
 
 from starlette.datastructures import State, URLPath
 from starlette.middleware import Middleware, _MiddlewareFactory
+from starlette.middleware.rootpath import RootPathStrippingMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.errors import ServerErrorMiddleware
 from starlette.middleware.exceptions import ExceptionMiddleware
@@ -93,10 +94,13 @@ class Starlette:
             + [Middleware(ExceptionMiddleware, handlers=exception_handlers, debug=debug)]
         )
 
-        app = self.router
+        app = self.router        
         for cls, args, kwargs in reversed(middleware):
             app = cls(app, *args, **kwargs)
         return app
+        # Add root path stripping last so it executes first if root_path is set
+        if self.root_path:
+            app = RootPathStrippingMiddleware(app, self.root_path)
 
     @property
     def routes(self) -> list[BaseRoute]:
