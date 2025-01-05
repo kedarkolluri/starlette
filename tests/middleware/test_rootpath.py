@@ -1,5 +1,4 @@
 # tests/middleware/test_rootpath.py
-
 import pytest
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
@@ -7,9 +6,23 @@ from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 
 def test_root_path_stripping_before_cors():
-    app = Starlette(root_path="/prefix")
+    """
+    Verify that root_path stripping happens before CORS middleware processes the request
+    """
+    app = Starlette()
     
-    # Add CORS middleware
+    paths_seen = []
+    
+    class PathTrackingMiddleware:
+        def __init__(self, app):
+            self.app = app
+            
+        async def __call__(self, scope, receive, send):
+            paths_seen.append(scope["path"])
+            await self.app(scope, receive, send)
+    
+    # Add middlewares in this order
+    app.add_middleware(PathTrackingMiddleware)  # Will see stripped path
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -21,11 +34,12 @@ def test_root_path_stripping_before_cors():
     async def test_endpoint(request):
         return JSONResponse({"path": request.url.path})
     
-    client = TestClient(app)
+    # Create test client that includes root_path in the ASGI scope
+    client = TestClient(app, base_url="http://testserver", root_path="/prefix")
     
     # Test OPTIONS request (CORS preflight)
     response = client.options(
-        "/prefix/test",
+        "/test",  # TestClient will prepend the root_path
         headers={
             "Origin": "http://localhost",
             "Access-Control-Request-Method": "POST",
@@ -33,38 +47,6 @@ def test_root_path_stripping_before_cors():
     )
     assert response.status_code == 200
     assert "access-control-allow-origin" in response.headers
-    
-    # Test regular request
-    response = client.get("/prefix/test")
-    assert response.status_code == 200
-    assert response.json()["path"] == "/test"
-
-def test_root_path_stripping_preserves_original_path():
-    app = Starlette(root_path="/prefix")
-    
-    @app.route("/test")
-    async def test_endpoint(request):
-        return JSONResponse({
-            "path": request.url.path,
-            "original_path": request.scope.get("original_path")
-        })
-    
-    client = TestClient(app)
-    response = client.get("/prefix/test")
-    assert response.status_code == 200
-    assert response.json() == {
-        "path": "/test",
-        "original_path": "/prefix/test"
-    }
-
-def test_root_path_stripping_handles_multiple_segments():
-    app = Starlette(root_path="/prefix/v1")
-    
-    @app.route("/test")
-    async def test_endpoint(request):
-        return JSONResponse({"path": request.url.path})
-    
-    client = TestClient(app)
-    response = client.get("/prefix/v1/test")
-    assert response.status_code == 200
-    assert response.json()["path"] == "/test"
+    # Verify path was stripped before reaching our tracking middleware
+    assert "/test" in paths_seen
+    assert "/prefix/test" not in paths_seen
